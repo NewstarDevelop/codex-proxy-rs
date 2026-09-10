@@ -1,4 +1,4 @@
-//! 关闭 redirect、proxy 与业务重试的生产 reqwest transport。
+//! 支持环境代理，关闭 redirect 与业务重试的生产 reqwest transport。
 
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext};
 use std::collections::{HashMap, VecDeque};
@@ -679,7 +679,6 @@ fn build_official_client(
 ) -> Result<Client, GrokReqwestTransportBuildError> {
     let mut builder = Client::builder()
         .redirect(Policy::none())
-        .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
@@ -728,6 +727,7 @@ fn valid_billing_url(url: &Url, host: &str) -> bool {
 struct StrictDnsResolver {
     policy: GrokDnsResolutionPolicy,
     trusted_doh: TrustedDohResolver,
+    proxy_hosts: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -753,6 +753,20 @@ impl StrictDnsResolver {
         Ok(Self {
             policy,
             trusted_doh: TrustedDohResolver::new()?,
+            proxy_hosts: [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ]
+            .into_iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .filter_map(|value| Url::parse(&value).ok())
+            .filter(|url| matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h"))
+            .filter_map(|url| url.host_str().map(str::to_owned))
+            .collect(),
         })
     }
 }
@@ -760,6 +774,14 @@ impl StrictDnsResolver {
 impl Resolve for StrictDnsResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let requested_host = name.as_str().to_owned();
+        // Only explicitly configured proxy hosts bypass the upstream DNS policy.
+        // A proxy may intentionally resolve to a loopback or private address.
+        if self.proxy_hosts.iter().any(|host| host == &requested_host) {
+            return Box::pin(async move {
+                let addresses = tokio::net::lookup_host((requested_host, 0)).await?;
+                Ok(Box::new(addresses) as Addrs)
+            });
+        }
         if self
             .policy
             .plan_system_resolution(&requested_host, &[])
@@ -827,7 +849,6 @@ impl TrustedDohResolver {
     fn new() -> Result<Self, GrokReqwestTransportBuildError> {
         let client = Client::builder()
             .redirect(Policy::none())
-            .no_proxy()
             .https_only(true)
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(OAUTH_REQUEST_TIMEOUT)

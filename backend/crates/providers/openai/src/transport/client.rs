@@ -64,7 +64,6 @@ pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
 
     let builder = Client::builder()
         .use_rustls_tls()
-        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .pool_max_idle_per_host(4)
         .pool_idle_timeout(None::<Duration>)

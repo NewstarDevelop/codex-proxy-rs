@@ -279,7 +279,6 @@ pub fn openai_token_client(
     ensure_rustls_provider();
     let builder = Client::builder()
         .use_rustls_tls()
-        .no_proxy()
         .redirect(Policy::none())
         .connect_timeout(TOKEN_CONNECT_TIMEOUT)
         .timeout(TOKEN_REQUEST_TIMEOUT);

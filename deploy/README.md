@@ -9,8 +9,47 @@
 - `config.yaml`：应用行为与真实凭据，由 `config.example.yaml` 复制得到并被 Git 忽略。
 - `compose.yaml`：镜像、容器网络、端口、目录映射、健康检查和资源限制。
 
-项目不使用 `.env` 配置文件。Compose 环境变量用于容器地址、镜像选择和构建发布；
+项目不使用 `.env` 配置文件。Compose 环境变量用于容器地址、出站代理、镜像选择和构建发布；
 应用设置与凭据保存在 `config.yaml` 中。已有部署不要重新复制模板覆盖配置。
+
+## 出站代理（HTTP / SOCKS5）
+
+OpenAI 和 xAI 的 HTTP/SSE、OAuth、额度/模型查询及画像更新请求支持环境变量代理。
+OpenAI WebSocket 使用同一组环境变量。无需修改客户端访问网关的地址。
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `HTTP_PROXY` | HTTP 请求（WebSocket 的 `ws://`） |
+| `HTTPS_PROXY` | HTTPS 请求（WebSocket 的 `wss://`）；代理地址仍可为 `http://` |
+| `ALL_PROXY` | 未设置对应协议代理时使用的通用代理 |
+| `NO_PROXY` | 逗号分隔的直连主机，例如 `localhost,127.0.0.1,::1,postgres,redis`；`*` 全部直连 |
+
+代理 URL 支持 `http://HOST:PORT`、`socks5://HOST:PORT` 和 `socks5h://HOST:PORT`。
+推荐 `socks5h://`，由代理解析上游域名；`socks5://` 的 HTTP 请求在本机解析上游域名。
+需要认证时使用 `协议://用户名:密码@HOST:PORT`，特殊字符须 URL 编码；避免将凭据提交到仓库或日志。
+该设置是进程级的，也可能影响更新下载等其他使用环境代理的 HTTP 请求，不影响 PostgreSQL/Redis 连接。
+
+Docker Compose 已透传上述大写变量；在启动 Compose 的 shell 中设置。例如二选一：
+
+```bash
+# HTTP 代理
+export ALL_PROXY='http://HOST:PORT'
+# 或 SOCKS5 代理（远端 DNS）
+export ALL_PROXY='socks5h://HOST:PORT'
+
+export NO_PROXY='localhost,127.0.0.1,::1,postgres,redis'
+docker compose -f deploy/compose.yaml up -d --force-recreate codex-proxy-rs
+```
+
+如果 shell 已设置 `HTTP_PROXY` / `HTTPS_PROXY`，它们会覆盖 `ALL_PROXY` 对应的路由；
+切换代理时请同步修改或清除。直接运行二进制或 `cargo run` 时，也在启动前设置这些环境变量。
+环境变量在客户端创建时读取，修改后必须重启服务；取消代理需清除代理变量后重新创建容器。
+
+容器中的 `127.0.0.1` 指容器本身，而不是宿主机。Docker Desktop 可使用
+`host.docker.internal`；Linux 可在服务中配置
+`extra_hosts: ['host.docker.internal:host-gateway']`，并确保代理监听在容器可访问的地址。
+只对可信容器网络开放代理端口。配置 `NO_PROXY` 后，健康检查和内部服务仍保持直连。
+代理故障会使相应请求失败，不会自动改为直连；目标 TLS 证书校验保持开启。
 
 ## 准备
 
